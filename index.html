@@ -15,6 +15,8 @@
     --primary-hover: #2563eb;
     --success-color: #10b981;
     --error-color: #ef4444;
+    --hint-color: #f59e0b; /* Amber */
+    --hint-bg: #fef3c7;
     --border-color: #cbd5e1;
     
     /* Cell States */
@@ -142,9 +144,9 @@
   }
 
   @media (hover: hover) {
-    .cell.clickable:hover .shape-layer { background-color: var(--cell-hover); --scl: 1.05; }
+    .cell.clickable:not(.locked):hover .shape-layer { background-color: var(--cell-hover); --scl: 1.05; }
   }
-  .cell.clickable:active .shape-layer { --scl: 0.9; } 
+  .cell.clickable:not(.locked):active .shape-layer { --scl: 0.9; } 
 
   .content-layer {
     position: absolute; top: 0; left: 0; right: 0; bottom: 0;
@@ -170,6 +172,12 @@
   .cell.solution .shape-layer { background-color: var(--solution-bg); border-color: var(--solution-border); }
   .cell.solution .shape-layer::after { background-color: var(--solution-border); }
 
+  /* Locked (Hint) State */
+  .cell.locked .shape-layer { background-color: var(--hint-bg); border-color: var(--hint-color); }
+  .cell.locked .shape-layer::after { background-color: var(--hint-color); }
+  .cell.active-path.locked .shape-layer { background-color: #fde68a; } /* Darker amber when path flows through */
+  .cell.locked.clickable { cursor: default; }
+
   /* Default Error State */
   .cell.error .shape-layer { background-color: #fee2e2; border-color: var(--error-color); }
   .cell.error .shape-layer::after { background-color: var(--error-color); }
@@ -185,12 +193,15 @@
   button {
     padding: 12px 24px; font-size: 1.05rem; font-weight: 600; font-family: inherit; cursor: pointer;
     background-color: var(--primary-color); color: white; border: none; border-radius: 12px;
-    transition: all 0.2s; -webkit-tap-highlight-color: transparent; 
+    transition: all 0.2s; -webkit-tap-highlight-color: transparent; flex: 1; max-width: 180px;
   }
   @media (hover: hover) { button:hover:not(:disabled) { background-color: var(--primary-hover); } }
   button:active:not(:disabled) { transform: translateY(2px); }
   
   button:disabled { background-color: #cbd5e1; cursor: not-allowed; transform: none; opacity: 0.6; }
+
+  #btn-hint { background-color: var(--hint-color); }
+  @media (hover: hover) { #btn-hint:hover:not(:disabled) { background-color: #d97706; } }
 
   #btn-results { background-color: var(--success-color); display: none; }
   @media (hover: hover) { #btn-results:hover { background-color: #059669; } }
@@ -233,7 +244,7 @@
   .timer-value { font-size: 1.8rem; font-weight: 800; color: #0f172a; font-variant-numeric: tabular-nums; }
 
   #btn-share-results {
-    background-color: var(--primary-color); width: 100%; font-size: 1.15rem; padding: 14px;
+    background-color: var(--primary-color); width: 100%; font-size: 1.15rem; padding: 14px; max-width: 100%;
     box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
   }
   @media (hover: hover) { #btn-share-results:hover { background-color: var(--primary-hover); } }
@@ -274,7 +285,7 @@
     .current-total-box { padding: 8px 14px; font-size: 1rem; }
     
     .button-group { margin-top: 15px; gap: 8px; }
-    .button-group button { width: 100%; padding: 12px; font-size: 1rem; } 
+    .button-group button { width: 100%; padding: 12px; font-size: 1rem; max-width: 100%; } 
     #tries-left { margin-top: 8px; font-size: 0.85rem; }
     
     .stats-grid { gap: 14px; margin-bottom: 20px; }
@@ -329,6 +340,7 @@
     </div>
 
     <div class="button-group">
+      <button id="btn-hint" onclick="useHint()">Hint (3)</button>
       <button id="btn-test" onclick="testPath()" disabled>Submit</button>
       <button id="btn-results" onclick="showResults()">See Results</button>
     </div>
@@ -437,6 +449,7 @@
   let hasWon = false;
   let hasLost = false;
   let checksRemaining = 5;
+  let hintsRemaining = 3;
   let solutionRevealed = false; 
 
   window.addEventListener('resize', () => {
@@ -505,6 +518,7 @@
   function saveGameState() {
     try {
       const currentDirections = gridData.flat().map(cell => cell.dir);
+      const lockedStates = gridData.flat().map(cell => cell.isLocked || false);
       const highlights = [];
       document.querySelectorAll('.cell').forEach(c => {
         let classes = [];
@@ -515,6 +529,7 @@
 
       const state = { 
         directions: currentDirections, checks: checksRemaining, 
+        hints: hintsRemaining, locked: lockedStates,
         won: hasWon, lost: hasLost, highlights: highlights,
         lastTotal: document.getElementById('current-val').innerText
       };
@@ -540,9 +555,17 @@
     hasLost = false;
     solutionRevealed = false;
     checksRemaining = 5;
+    hintsRemaining = 3;
     
-    document.getElementById('btn-test').style.display = 'inline-block';
-    document.getElementById('btn-test').disabled = true;
+    const testBtn = document.getElementById('btn-test');
+    const hintBtn = document.getElementById('btn-hint');
+    
+    testBtn.style.display = 'inline-block';
+    testBtn.disabled = true;
+    hintBtn.style.display = 'inline-block';
+    hintBtn.disabled = false;
+    hintBtn.innerText = `Hint (3)`;
+    
     document.getElementById('btn-results').style.display = 'none';
     document.getElementById('current-val').innerText = '--';
     
@@ -605,7 +628,7 @@
         row.push({
           row: r, col: c, op: '', val: 0, dir: 0, visualRot: 0,
           isStart: (r === 0 && c === 0), isEnd: (r === GRID_SIZE - 1 && c === GRID_SIZE - 1),
-          isPartOfSolution: false, solutionDir: 0
+          isPartOfSolution: false, solutionDir: 0, isLocked: false
         });
       }
       gridData.push(row);
@@ -659,6 +682,7 @@
     const savedState = loadGameState();
     if (savedState) {
       checksRemaining = savedState.checks;
+      hintsRemaining = savedState.hints !== undefined ? savedState.hints : 3;
       hasWon = savedState.won;
       hasLost = savedState.lost;
       
@@ -672,6 +696,9 @@
           if (!gridData[r][c].isStart && !gridData[r][c].isEnd) {
             gridData[r][c].dir = savedState.directions[cellIndex];
             gridData[r][c].visualRot = gridData[r][c].dir;
+            if (savedState.locked && savedState.locked[cellIndex]) {
+                gridData[r][c].isLocked = true;
+            }
           }
           cellIndex++;
         }
@@ -692,22 +719,29 @@
     }
 
     const testBtn = document.getElementById('btn-test');
+    const hintBtn = document.getElementById('btn-hint');
     const resultsBtn = document.getElementById('btn-results');
     const triesLabel = document.getElementById('tries-left');
     
+    hintBtn.innerText = `Hint (${hintsRemaining})`;
+    if (hintsRemaining <= 0) hintBtn.disabled = true;
+
     if (hasWon) {
       testBtn.style.display = 'none';
+      hintBtn.style.display = 'none';
       triesLabel.style.display = 'none';
       resultsBtn.style.display = 'inline-block';
       updateStats(true); 
     } else if (hasLost) {
       testBtn.style.display = 'none';
+      hintBtn.style.display = 'none';
       triesLabel.style.display = 'none';
       resultsBtn.style.display = 'inline-block';
       revealSolution();
       updateStats(false); 
     } else {
       testBtn.style.display = 'inline-block';
+      hintBtn.style.display = 'inline-block';
       resultsBtn.style.display = 'none';
       triesLabel.style.display = 'block';
       triesLabel.innerText = `${checksRemaining} tries left`;
@@ -723,6 +757,7 @@
     
     if (data.isStart) cellEl.classList.add('start');
     if (data.isEnd) cellEl.classList.add('end');
+    if (data.isLocked) cellEl.classList.add('locked');
 
     const shapeEl = document.createElement('div');
     shapeEl.className = 'shape-layer';
@@ -771,6 +806,47 @@
     }
 
     container.appendChild(cellEl);
+  }
+
+  // --- HINT LOGIC ---
+  function useHint() {
+    if (hasWon || hasLost || hintsRemaining <= 0) return;
+    
+    let lockableCells = [];
+    for(let r=0; r<GRID_SIZE; r++) {
+      for(let c=0; c<GRID_SIZE; c++) {
+        let cell = gridData[r][c];
+        if(!cell.isStart && !cell.isEnd && !cell.isLocked) {
+          lockableCells.push(cell);
+        }
+      }
+    }
+    
+    if (lockableCells.length === 0) return;
+    
+    let randomIdx = Math.floor(Math.random() * lockableCells.length);
+    let targetCell = lockableCells[randomIdx];
+    
+    let stepsToSolution = targetCell.solutionDir - (targetCell.visualRot % 4);
+    if (stepsToSolution < 0) stepsToSolution += 4;
+    targetCell.visualRot += stepsToSolution;
+    targetCell.dir = targetCell.visualRot % 4;
+    targetCell.isLocked = true;
+    
+    let cellEl = document.getElementById(`cell-${targetCell.row}-${targetCell.col}`);
+    let shapeEl = cellEl.querySelector('.shape-layer');
+    if (shapeEl) {
+      shapeEl.style.setProperty('--rot', `${BASE_ROTATION + (targetCell.visualRot * 90)}deg`);
+    }
+    cellEl.classList.add('locked');
+    
+    hintsRemaining--;
+    const hintBtn = document.getElementById('btn-hint');
+    hintBtn.innerText = `Hint (${hintsRemaining})`;
+    if (hintsRemaining === 0) hintBtn.disabled = true;
+    
+    saveGameState();
+    drawLivePath();
   }
 
   // --- LIVE PREVIEW & PATH VALIDATION ---
@@ -928,6 +1004,7 @@
     if (currentVal === window.DYNAMIC_GOAL) {
         hasWon = true;
         document.getElementById('btn-test').style.display = 'none';
+        document.getElementById('btn-hint').style.display = 'none';
         document.getElementById('tries-left').style.display = 'none';
         document.getElementById('btn-results').style.display = 'inline-block';
         
@@ -958,6 +1035,7 @@
   function triggerGameOver() {
     hasLost = true;
     document.getElementById('btn-test').style.display = 'none';
+    document.getElementById('btn-hint').style.display = 'none';
     document.getElementById('tries-left').style.display = 'none';
     document.getElementById('btn-results').style.display = 'inline-block';
     
@@ -1021,7 +1099,9 @@
     let shareText = `Sumble - ${getFormattedDate()}\n`;
     
     if (hasWon) {
-        shareText += `Solved in ${5 - checksRemaining} tries! (Streak: ${stats.currentStreak})\n\n`;
+        let hintPenalty = 3 - hintsRemaining;
+        let hintStr = hintPenalty > 0 ? ` (Used ${hintPenalty} Hint${hintPenalty > 1 ? 's' : ''})` : '';
+        shareText += `Solved in ${5 - checksRemaining} tries!${hintStr}\nStreak: ${stats.currentStreak}\n\n`;
     } else {
         shareText += `X/5 tries (Streak: 0)\n\n`;
     }
@@ -1031,6 +1111,7 @@
       for (let c = 0; c < GRID_SIZE; c++) {
         if (r === 0 && c === 0) rowEmoji += "🏁";
         else if (r === GRID_SIZE - 1 && c === GRID_SIZE - 1) rowEmoji += "🎯";
+        else if (gridData[r][c].isLocked) rowEmoji += "🟨"; // Indicates a hint was used here
         else if (hasWon || hasLost) rowEmoji += "🟩"; 
         else rowEmoji += "⬜";
       }
